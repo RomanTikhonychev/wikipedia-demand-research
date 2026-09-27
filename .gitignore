@@ -1,0 +1,6 @@
+# Local environments and generated research artifacts
+/.venv/
+/outputs/
+/researches/
+__pycache__/
+*.py[cod]

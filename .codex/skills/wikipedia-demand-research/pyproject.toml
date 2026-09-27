@@ -1,0 +1,10 @@
+[project]
+name = "wikipedia-demand-research"
+version = "0.1.0"
+description = "Reproducible Wikimedia pageview collection for an agent skill"
+requires-python = ">=3.10"
+dependencies = [
+  "matplotlib==3.11.2",
+  "reportlab==5.0.1",
+  "PyYAML==6.0.3",
+]

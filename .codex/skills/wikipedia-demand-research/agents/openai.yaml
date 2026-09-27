@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wikipedia Demand Research"
+  short_description: "Compare Wikipedia interest across language editions"
+  default_prompt: "Use $wikipedia-demand-research to analyze Wikipedia topic-interest trends across language editions."
