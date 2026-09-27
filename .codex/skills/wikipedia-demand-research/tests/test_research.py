@@ -5,6 +5,7 @@ import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 
 COMPARE_PATH = Path(__file__).parents[1] / "scripts" / "compare_topic.py"
@@ -29,6 +30,39 @@ class ResearchTests(unittest.TestCase):
         self.assertIn("/uk.wikipedia/all-access/user/", url)
         self.assertIn("%D0%86%D0%BD%D1%82", url)
         self.assertTrue(url.endswith("/2024010100/2024013100"))
+
+    def test_access_specific_urls_keep_user_traffic_filter(self):
+        article = compare_topic.article_url("uk.wikipedia", "Astronomy", date(2024, 1, 1), date(2024, 1, 31), "mobile-web")
+        aggregate = compare_topic.aggregate_url("uk.wikipedia", date(2024, 1, 1), date(2024, 1, 31), "desktop")
+        self.assertIn("/mobile-web/user/Astronomy/", article)
+        self.assertIn("/desktop/user/monthly/", aggregate)
+
+    def test_traffic_metadata_records_excluded_categories(self):
+        self.assertEqual(
+            compare_topic.traffic_metadata("mobile-app"),
+            {"access": "mobile-app", "access_label": "mobile app", "agent": "user", "excluded_agent_categories": ["spider", "automated"]},
+        )
+
+    def test_search_returns_up_to_four_candidates_by_default(self):
+        payload = {
+            "query": {
+                "pages": [
+                    {"title": "On-board diagnostics", "pageprops": {"wikibase_item": "Q1"}, "description": "vehicle diagnostics"},
+                    {"title": "ELM327", "pageprops": {"wikibase_item": "Q2"}, "description": "adapter"},
+                    {"title": "OBD-II PIDs", "pageprops": {"wikibase_item": "Q3"}, "description": "diagnostic parameters"},
+                    {"title": "OBD", "pageprops": {"wikibase_item": "Q4", "disambiguation": ""}, "description": "disambiguation page"},
+                ]
+            }
+        }
+        with patch.object(compare_topic, "mediawiki_api", return_value=payload) as request:
+            candidates = compare_topic.search_candidates("en.wikipedia", "OBD adapter", 4)
+        self.assertEqual(len(candidates), 4)
+        self.assertEqual(request.call_args.args[1]["gsrlimit"], "4")
+        self.assertTrue(candidates[-1]["disambiguation"])
+
+    def test_search_limit_defaults_to_four(self):
+        with patch.object(sys, "argv", ["compare_topic.py", "--search", "OBD adapter", "--source-project", "en.wikipedia"]):
+            self.assertEqual(compare_topic.parse_args().search_limit, 4)
 
     def test_monthly_article_tracks_views_and_days(self):
         rows = [("2024-01-30", 10), ("2024-01-31", 20), ("2024-02-01", 5)]
@@ -68,15 +102,46 @@ class ResearchTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertIn("Coverage", text)
             self.assertIn("not market size", text)
+            self.assertIn("spider or automated is excluded", text)
+
+    def test_decision_conclusion_separates_data_confidence_and_relevance(self):
+        item = {
+            "trend": "growing",
+            "period_change": 0.2,
+            "reliability": "medium",
+            "reliability_reason": "12 complete calendar months.",
+        }
+        conclusion = compare_topic.conclusion_for_edition(
+            "uk.wikipedia",
+            item,
+            "Should we validate an astronomy course for Ukrainian readers?",
+            "medium",
+            "Article views show topic interest, not course intent.",
+        )
+        self.assertIn("increased by +20%", conclusion["data_observation"])
+        self.assertEqual(conclusion["confidence"], "medium")
+        self.assertEqual(conclusion["decision_relevance"]["assessment"], "medium")
+        self.assertIn("not course intent", compare_topic.conclusion_text(conclusion))
+
+    def test_markdown_report_includes_decision_conclusion(self):
+        summary = {"uk.wikipedia": {"article": "Astronomy", "trend": "growing", "period_change": 0.2, "reliability": "medium", "reliability_reason": "12 complete calendar months.", "data_quality": {"coverage": 1.0, "days_with_data": 365, "expected_days": 365}}}
+        conclusion = compare_topic.conclusion_for_edition("uk.wikipedia", summary["uk.wikipedia"])
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "report.md"
+            compare_topic.create_markdown_report(path, "Astronomy", "Q6999", summary, date(2024, 1, 1), date(2024, 12, 31), [], conclusions=[conclusion])
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("## Decision conclusions", text)
+            self.assertIn("Decision relevance: not assessed", text)
 
     def test_pdf_is_one_page_and_contains_quality_table(self):
         summary = {"uk.wikipedia": {"article": "Astronomy", "trend": "growing", "period_change": 0.2, "year_over_year": None, "reliability": "medium", "reliability_reason": "12 complete calendar months.", "data_quality": {"coverage": 1.0, "missing_days": 0, "zero_days": 0}}}
         rows = [{"month": "2024-01", "article_views": 100, "share_of_project_views": 0.000001}]
+        conclusion = compare_topic.conclusion_for_edition("uk.wikipedia", summary["uk.wikipedia"])
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             chart, pdf = root / "chart.png", root / "report.pdf"
             compare_topic.create_chart({"uk.wikipedia": rows}, chart)
-            compare_topic.create_pdf(pdf, chart, "Astronomy", "Q6999", summary, date(2024, 1, 1), date(2024, 12, 31), [])
+            compare_topic.create_pdf(pdf, chart, "Astronomy", "Q6999", summary, date(2024, 1, 1), date(2024, 12, 31), [], "mobile-web", [conclusion])
             info = subprocess.run(["pdfinfo", str(pdf)], check=True, capture_output=True, text=True).stdout
             self.assertIn("Pages:           1", info)
             self.assertIn(b"%PDF", pdf.read_bytes()[:8])
@@ -94,6 +159,16 @@ class ResearchTests(unittest.TestCase):
         result = compare_topic.metrics(rows)
         self.assertEqual(result["trend"], "insufficient data")
         self.assertEqual(result["reliability"], "low")
+
+    def test_indexed_views_uses_first_complete_nonzero_month(self):
+        rows = [
+            {"article_views": 200, "complete_month": False},
+            {"article_views": 0, "complete_month": True},
+            {"article_views": 80, "complete_month": True},
+            {"article_views": 120, "complete_month": True},
+            {"article_views": 160, "complete_month": False},
+        ]
+        self.assertEqual(compare_topic.indexed_views(rows), [None, None, 100.0, 150.0, None])
 
     def test_research_spec_round_trip_preserves_confirmed_topic(self):
         spec = research_config.ResearchSpec(
@@ -148,6 +223,51 @@ class ResearchTests(unittest.TestCase):
             "period": {"start": "2024-01-01", "end": "2024-12-31"},
         }
         self.assertEqual(research_config.parse_research_spec(payload).projects, ("uk.wikipedia",))
+
+    def test_research_spec_defaults_to_all_access_and_accepts_mobile_web(self):
+        payload = {
+            "research_name": "traffic-scope",
+            "topic": {"source_project": "en.wikipedia", "source_title": "English language", "qid": "Q1860"},
+            "projects": ["uk.wikipedia"],
+            "period": {"start": "2024-01-01", "end": "2024-12-31"},
+        }
+        self.assertEqual(research_config.parse_research_spec(payload).access, "all-access")
+        payload["traffic"] = {"access": "mobile-web"}
+        self.assertEqual(research_config.parse_research_spec(payload).access, "mobile-web")
+
+    def test_research_spec_preserves_decision_context_and_relevance(self):
+        payload = {
+            "research_name": "decision-context",
+            "topic": {"source_project": "en.wikipedia", "source_title": "English language", "qid": "Q1860"},
+            "projects": ["uk.wikipedia"],
+            "period": {"start": "2024-01-01", "end": "2024-12-31"},
+            "decision": {
+                "question": "Which audience should we validate next?",
+                "proxy_relevance": "medium",
+                "proxy_relevance_reason": "Topic interest is not purchase intent.",
+            },
+        }
+        spec = research_config.parse_research_spec(payload)
+        self.assertEqual(spec.decision_question, "Which audience should we validate next?")
+        self.assertEqual(spec.proxy_relevance, "medium")
+        self.assertEqual(spec.to_dict()["decision"], payload["decision"])
+
+    def test_research_spec_requires_a_question_for_proxy_relevance(self):
+        payload = {
+            "research_name": "missing-question",
+            "topic": {"source_project": "en.wikipedia", "source_title": "English language", "qid": "Q1860"},
+            "projects": ["uk.wikipedia"],
+            "period": {"start": "2024-01-01", "end": "2024-12-31"},
+            "decision": {"proxy_relevance": "high"},
+        }
+        with self.assertRaisesRegex(ValueError, "requires decision.question"):
+            research_config.parse_research_spec(payload)
+
+    def test_access_option_is_available_without_changing_default(self):
+        with patch.object(sys, "argv", ["compare_topic.py", "--source-project", "en.wikipedia", "--topic", "Astronomy", "--projects", "uk.wikipedia", "--start", "2024-01-01", "--end", "2024-12-31", "--output-dir", "outputs/example", "--access", "mobile-app"]):
+            self.assertEqual(compare_topic.parse_args().access, "mobile-app")
+        with patch.object(sys, "argv", ["compare_topic.py", "--source-project", "en.wikipedia", "--topic", "Astronomy", "--projects", "uk.wikipedia", "--start", "2024-01-01", "--end", "2024-12-31", "--output-dir", "outputs/example"]):
+            self.assertEqual(compare_topic.direct_run_spec(compare_topic.parse_args()).access, "all-access")
 
     def test_default_output_directory_is_unique_per_run_timestamp(self):
         path = Path("researches") / "english-learning" / "research.yaml"

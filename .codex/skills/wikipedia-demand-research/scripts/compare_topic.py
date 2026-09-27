@@ -38,7 +38,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from research_config import ResearchSpec, default_run_output_dir, load_research_spec, write_research_spec
+from research_config import ACCESS_TYPES, RELEVANCE_LEVELS, ResearchSpec, default_run_output_dir, load_research_spec, write_research_spec
 
 
 REST_ROOT = "https://wikimedia.org/api/rest_v1/metrics/pageviews"
@@ -47,6 +47,12 @@ CACHE_DIR: Path | None = None
 REFRESH = False
 OFFLINE = False
 REQUEST_LOG: list[dict[str, object]] = []
+ACCESS_LABELS = {
+    "all-access": "all access types",
+    "desktop": "desktop web",
+    "mobile-web": "mobile web",
+    "mobile-app": "mobile app",
+}
 
 
 def parse_date(value: str) -> date:
@@ -155,13 +161,29 @@ def resolve_sitelinks(qid: str, projects: list[str]) -> dict[str, str]:
     return result
 
 
-def article_url(project: str, article: str, start: date, end: date) -> str:
+def article_url(project: str, article: str, start: date, end: date, access: str = "all-access") -> str:
     encoded_article = quote(article.replace(" ", "_"), safe="")
-    return f"{REST_ROOT}/per-article/{project}/all-access/user/{encoded_article}/daily/{timestamp(start)}/{timestamp(end)}"
+    return f"{REST_ROOT}/per-article/{project}/{access}/user/{encoded_article}/daily/{timestamp(start)}/{timestamp(end)}"
 
 
-def aggregate_url(project: str, start: date, end: date) -> str:
-    return f"{REST_ROOT}/aggregate/{project}/all-access/user/monthly/{timestamp(start)}/{timestamp(end)}"
+def aggregate_url(project: str, start: date, end: date, access: str = "all-access") -> str:
+    return f"{REST_ROOT}/aggregate/{project}/{access}/user/monthly/{timestamp(start)}/{timestamp(end)}"
+
+
+def traffic_metadata(access: str) -> dict[str, object]:
+    return {
+        "access": access,
+        "access_label": ACCESS_LABELS[access],
+        "agent": "user",
+        "excluded_agent_categories": ["spider", "automated"],
+    }
+
+
+def traffic_scope_text(access: str) -> str:
+    return (
+        f"Traffic scope: {ACCESS_LABELS[access]}; Wikimedia user traffic only. "
+        "Traffic categorized by Wikimedia as spider or automated is excluded."
+    )
 
 
 def article_daily(payload: dict) -> list[tuple[str, int]]:
@@ -205,6 +227,27 @@ def is_complete_month(month: str, days: int, start: date, end: date) -> bool:
 
 def percent(value: float | None) -> str:
     return "—" if value is None else f"{value * 100:+.0f}%"
+
+
+def indexed_views(rows: list[dict]) -> list[float | None]:
+    """Express complete monthly views relative to the first usable month."""
+
+    baseline_index = next(
+        (
+            index
+            for index, row in enumerate(rows)
+            if row.get("complete_month", False) and row["article_views"] > 0
+        ),
+        None,
+    )
+    if baseline_index is None:
+        return [None for _ in rows]
+    baseline = rows[baseline_index]["article_views"]
+    return [
+        row["article_views"] / baseline * 100
+        if index >= baseline_index and row.get("complete_month", False) else None
+        for index, row in enumerate(rows)
+    ]
 
 
 def metrics(rows: list[dict]) -> dict[str, object]:
@@ -262,9 +305,75 @@ def metrics(rows: list[dict]) -> dict[str, object]:
     }
 
 
-def create_chart(series: dict[str, list[dict]], chart_path: Path) -> None:
+def conclusion_for_edition(
+    project: str,
+    item: dict,
+    decision_question: str | None = None,
+    proxy_relevance: str | None = None,
+    proxy_relevance_reason: str | None = None,
+) -> dict[str, object]:
+    """Keep the data observation separate from the product-decision proxy."""
+
+    change = item["period_change"]
+    if item["trend"] == "insufficient data":
+        observation = f"The available pageview history for {project} is insufficient for a reliable trend conclusion."
+        next_step = "Collect at least six complete calendar months before interpreting a trend."
+    elif item["trend"] == "growing":
+        observation = f"Views of the linked article in {project} increased by {percent(change)} over the selected period."
+        next_step = "Validate this topic signal with a product-specific source such as search-demand data or user interviews."
+    elif item["trend"] == "declining":
+        observation = f"Views of the linked article in {project} decreased by {percent(change)} over the selected period."
+        next_step = "Check whether the decline persists in a longer period and with a product-specific source."
+    else:
+        observation = f"Views of the linked article in {project} were roughly flat ({percent(change)}) over the selected period."
+        next_step = "Use a product-specific source before prioritizing this audience."
+
+    relevance: dict[str, object] = {"assessment": "not assessed"}
+    if decision_question:
+        relevance["decision_question"] = decision_question
+    if proxy_relevance:
+        relevance["assessment"] = proxy_relevance
+        relevance["basis"] = "user-confirmed assessment of how well the article proxies the decision"
+        if proxy_relevance_reason:
+            relevance["reason"] = proxy_relevance_reason
+    else:
+        relevance["reason"] = "Confirm how well this Wikipedia article represents the decision before relying on the signal."
+
+    return {
+        "edition": project,
+        "data_observation": observation,
+        "confidence": item["reliability"],
+        "confidence_reason": item["reliability_reason"],
+        "decision_relevance": relevance,
+        "recommended_next_step": next_step,
+    }
+
+
+def conclusion_text(conclusion: dict[str, object]) -> str:
+    relevance = conclusion["decision_relevance"]
+    relevance_text = f"Decision relevance: {relevance['assessment']}"
+    if relevance.get("reason"):
+        relevance_text += f" ({relevance['reason']})"
+    return (
+        f"{conclusion['data_observation']} Confidence: {conclusion['confidence']} "
+        f"({conclusion['confidence_reason']}) {relevance_text}. "
+        f"Next step: {conclusion['recommended_next_step']}"
+    )
+
+
+def compact_conclusion_text(conclusion: dict[str, object]) -> str:
+    """Keep the one-page PDF readable; the full rationale remains in Markdown."""
+
+    relevance = conclusion["decision_relevance"]
+    return (
+        f"{conclusion['data_observation']} Confidence: {conclusion['confidence']}. "
+        f"Decision relevance: {relevance['assessment']}."
+    )
+
+
+def create_chart(series: dict[str, list[dict]], chart_path: Path, access: str = "all-access") -> None:
     plt.rcParams["font.family"] = "DejaVu Sans"
-    figure, (raw_axis, share_axis) = plt.subplots(1, 2, figsize=(10, 3.5), dpi=180)
+    figure, (raw_axis, share_axis, index_axis) = plt.subplots(1, 3, figsize=(12.6, 4.2), dpi=180)
     for project, rows in series.items():
         months = [row["month"] for row in rows]
         raw_axis.plot(
@@ -277,15 +386,34 @@ def create_chart(series: dict[str, list[dict]], chart_path: Path) -> None:
         )
         shares = [row["share_of_project_views"] * 1_000_000 if row["share_of_project_views"] is not None else float("nan") for row in rows]
         share_axis.plot(months, shares, marker="o", markersize=2.5, linewidth=1.7, label=project)
+        index_axis.plot(
+            months,
+            [value if value is not None else float("nan") for value in indexed_views(rows)],
+            marker="o",
+            markersize=2.5,
+            linewidth=1.7,
+            label=project,
+        )
     raw_axis.set_title("Monthly article views")
     raw_axis.set_ylabel("views")
     share_axis.set_title("Article share of edition views")
     share_axis.set_ylabel("views per million")
-    for axis in (raw_axis, share_axis):
+    index_axis.set_title("Indexed article-view trend")
+    index_axis.set_ylabel("first complete month = 100")
+    for axis in (raw_axis, share_axis, index_axis):
+        if series:
+            first_series = next(iter(series.values()))
+            months = [row["month"] for row in first_series]
+            interval = max(1, len(months) // 8)
+            axis.set_xticks(months[::interval])
         axis.tick_params(axis="x", rotation=35, labelsize=7)
         axis.grid(axis="y", alpha=0.2)
     raw_axis.legend(frameon=False, fontsize=7, ncol=min(2, len(series)))
-    figure.tight_layout()
+    if access != "all-access":
+        figure.suptitle(f"Access: {ACCESS_LABELS[access]}", fontsize=9)
+        figure.tight_layout(rect=(0, 0, 1, 0.95))
+    else:
+        figure.tight_layout()
     figure.savefig(chart_path, bbox_inches="tight")
     plt.close(figure)
 
@@ -299,6 +427,8 @@ def create_pdf(
     start: date,
     end: date,
     missing_projects: list[str],
+    access: str = "all-access",
+    conclusions: list[dict[str, object]] | None = None,
 ) -> None:
     font_path = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans.ttf"
     pdfmetrics.registerFont(TTFont("DejaVu", str(font_path)))
@@ -318,6 +448,7 @@ def create_pdf(
     )
     story = [Paragraph(f"Wikipedia interest signal: {topic}", heading)]
     story.append(Paragraph(f"Wikidata item: {qid}. Period: {start.isoformat()} to {end.isoformat()}.", body))
+    story.append(Paragraph(traffic_scope_text(access), body))
     story.append(Spacer(1, 3 * mm))
     image = Image(str(chart_path), width=178 * mm, height=62 * mm)
     story.extend([image, Spacer(1, 3 * mm)])
@@ -342,6 +473,10 @@ def create_pdf(
         )
     )
     story.extend([table, Spacer(1, 3 * mm)])
+    if conclusions:
+        story.append(Paragraph("Decision conclusions", body))
+        story.append(Paragraph("<br/>".join(compact_conclusion_text(conclusion) for conclusion in conclusions), body))
+        story.append(Spacer(1, 2 * mm))
     bullets = []
     for project, item in summary.items():
         quality = item["data_quality"]
@@ -360,14 +495,18 @@ def create_pdf(
     document.build(story)
 
 
-def create_markdown_report(path: Path, topic: str, qid: str, summary: dict[str, dict], start: date, end: date, missing_projects: list[str]) -> None:
-    lines = [f"# Wikipedia interest signal: {topic}", "", f"- **Wikidata item:** {qid}", f"- **Period:** {start.isoformat()} to {end.isoformat()}", "", "## Results", "", "| Edition | Article | Trend | Change | Reliability | Coverage |", "| --- | --- | --- | --- | --- | --- |"]
+def create_markdown_report(path: Path, topic: str, qid: str, summary: dict[str, dict], start: date, end: date, missing_projects: list[str], access: str = "all-access", conclusions: list[dict[str, object]] | None = None) -> None:
+    lines = [f"# Wikipedia interest signal: {topic}", "", f"- **Wikidata item:** {qid}", f"- **Period:** {start.isoformat()} to {end.isoformat()}", f"- **{traffic_scope_text(access)}**", "", "## Results", "", "| Edition | Article | Trend | Change | Reliability | Coverage |", "| --- | --- | --- | --- | --- | --- |"]
     for project, item in summary.items():
         lines.append(f"| {project} | {item['article']} | {item['trend']} | {percent(item['period_change'])} | {item['reliability']} | {item['data_quality']['coverage']:.0%} |")
     lines.extend(["", "## Interpretation", ""])
     for project, item in summary.items():
         quality = item["data_quality"]
         lines.append(f"- **{project}:** {item['trend']} ({percent(item['period_change'])}); {item['reliability_reason']} Coverage: {quality['days_with_data']}/{quality['expected_days']} days.")
+    if conclusions:
+        lines.extend(["", "## Decision conclusions", ""])
+        for conclusion in conclusions:
+            lines.append(f"- **{conclusion['edition']}:** {conclusion_text(conclusion)}")
     lines.extend(["", "## Limits", "", "Wikipedia article pageviews are a topic-interest signal, not market size, unique people, willingness to pay, or proof of product demand."])
     if missing_projects:
         lines.extend(["", f"No Wikidata-linked article was found for: {', '.join(missing_projects)}."])
@@ -383,9 +522,13 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--search", help="Search candidate Wikipedia articles; does not create or run research")
     parser.add_argument("--research-name", help="Name stored in --init-research; defaults to the source article title")
     parser.add_argument("--source-project", help="Edition containing --topic, e.g. en.wikipedia")
-    parser.add_argument("--search-limit", type=int, default=5, help="Maximum candidates for --search (1-10)")
+    parser.add_argument("--search-limit", type=int, default=4, help="Maximum candidates for --search (1-10; default: 4)")
     parser.add_argument("--topic", help="Exact source article title")
     parser.add_argument("--projects", help="Comma-separated editions, e.g. pl.wikipedia,cs.wikipedia")
+    parser.add_argument("--access", choices=ACCESS_TYPES, help="Traffic access type; default combines desktop, mobile web, and mobile app")
+    parser.add_argument("--decision-question", help="Decision the research should inform; saved in research.yaml")
+    parser.add_argument("--proxy-relevance", choices=RELEVANCE_LEVELS, help="User-confirmed relevance of the article proxy to that decision")
+    parser.add_argument("--proxy-relevance-reason", help="Why the confirmed article is high, medium, or low relevance to the decision")
     parser.add_argument("--start", type=parse_date, help="Inclusive YYYY-MM-DD")
     parser.add_argument("--end", type=parse_date, help="Inclusive YYYY-MM-DD")
     parser.add_argument("--output-dir", type=Path, help="Output directory; required for direct runs and optional for --research")
@@ -420,6 +563,10 @@ def direct_run_spec(args: argparse.Namespace) -> ResearchSpec:
         projects=projects,
         start=args.start,
         end=args.end,
+        access=args.access or "all-access",
+        decision_question=args.decision_question,
+        proxy_relevance=args.proxy_relevance,
+        proxy_relevance_reason=args.proxy_relevance_reason,
     )
 
 
@@ -428,6 +575,10 @@ def validate_run(spec: ResearchSpec) -> None:
         raise ValueError("Choose a non-future date range where period.end is not after today.")
     if len(spec.projects) > 5:
         raise ValueError("Use no more than five editions in one report.")
+    if spec.proxy_relevance and not spec.decision_question:
+        raise ValueError("A proxy relevance assessment requires a decision question.")
+    if spec.proxy_relevance_reason and not spec.proxy_relevance:
+        raise ValueError("A proxy relevance reason requires a proxy relevance assessment.")
     for project in spec.projects:
         project_site(project)
 
@@ -464,10 +615,17 @@ def run_article_basket(args: argparse.Namespace, spec: ResearchSpec, output_dir:
             "--projects", ",".join(spec.projects),
             "--start", spec.start.isoformat(),
             "--end", spec.end.isoformat(),
+            "--access", spec.access,
             "--output-dir", str(article_dir),
             "--cache-dir", str(args.cache_dir),
             "--user-agent", args.user_agent,
         ]
+        if spec.decision_question:
+            command.extend(["--decision-question", spec.decision_question])
+        if spec.proxy_relevance:
+            command.extend(["--proxy-relevance", spec.proxy_relevance])
+        if spec.proxy_relevance_reason:
+            command.extend(["--proxy-relevance-reason", spec.proxy_relevance_reason])
         if args.refresh:
             command.append("--refresh")
         if args.offline:
@@ -505,7 +663,7 @@ def main() -> int:
         if args.init_research and args.output_dir is not None:
             raise ValueError("--init-research does not create a report; omit --output-dir and run the saved specification next.")
         if args.research:
-            if any(value is not None for value in (args.source_project, args.topic, args.projects, args.start, args.end, args.research_name)):
+            if any(value is not None for value in (args.source_project, args.topic, args.projects, args.start, args.end, args.research_name, args.access, args.decision_question, args.proxy_relevance, args.proxy_relevance_reason)):
                 raise ValueError("Use either --research or direct topic parameters, not both.")
             spec = load_research_spec(args.research)
             research_path: Path | None = args.research
@@ -533,6 +691,10 @@ def main() -> int:
                 projects=spec.projects,
                 start=spec.start,
                 end=spec.end,
+                access=spec.access,
+                decision_question=spec.decision_question,
+                proxy_relevance=spec.proxy_relevance,
+                proxy_relevance_reason=spec.proxy_relevance_reason,
             )
             write_research_spec(args.init_research, initialized_spec)
             print(f"Created confirmed research specification in {args.init_research}")
@@ -552,8 +714,8 @@ def main() -> int:
         series: dict[str, list[dict]] = {}
         summary: dict[str, dict] = {}
         for project, article in titles.items():
-            this_article_url = article_url(project, article, spec.start, spec.end)
-            this_aggregate_url = aggregate_url(project, spec.start, spec.end)
+            this_article_url = article_url(project, article, spec.start, spec.end, spec.access)
+            this_aggregate_url = aggregate_url(project, spec.start, spec.end, spec.access)
             article_payload = get_json(this_article_url)
             project_payload = get_json(this_aggregate_url)
             raw["article_pageviews"][project] = article_payload
@@ -576,7 +738,7 @@ def main() -> int:
             item_summary = metrics(rows)
             summary[project] = {"article": article, **item_summary}
             all_rows.extend(rows)
-    except RuntimeError as error:
+    except (RuntimeError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
@@ -588,7 +750,11 @@ def main() -> int:
         writer.writeheader()
         writer.writerows(all_rows)
     chart_path = output_dir / "chart.png"
-    create_chart(series, chart_path)
+    conclusions = [
+        conclusion_for_edition(project, item, spec.decision_question, spec.proxy_relevance, spec.proxy_relevance_reason)
+        for project, item in summary.items()
+    ]
+    create_chart(series, chart_path, spec.access)
     create_pdf(
         output_dir / "report.pdf",
         chart_path,
@@ -598,15 +764,19 @@ def main() -> int:
         spec.start,
         spec.end,
         missing_projects,
+        spec.access,
+        conclusions,
     )
-    create_markdown_report(output_dir / "report.md", canonical_source_title, qid, summary, spec.start, spec.end, missing_projects)
+    create_markdown_report(output_dir / "report.md", canonical_source_title, qid, summary, spec.start, spec.end, missing_projects, spec.access, conclusions)
     manifest = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "parameters": {"source_project": spec.source_project, "topic": spec.source_title, "projects": list(spec.projects), "start": spec.start.isoformat(), "end": spec.end.isoformat()},
+        "traffic": traffic_metadata(spec.access),
         "wikidata_qid": qid,
         "resolved_articles": titles,
         "projects_without_linked_article": missing_projects,
         "summary": summary,
+        "decision_conclusions": conclusions,
         "raw_data_file": "raw_pageviews.json",
         "requests": REQUEST_LOG,
         "methodology_version": "0.1",

@@ -62,12 +62,30 @@ projects:
 period:
   start: 2024-01-01
   end: 2025-12-31
+traffic:
+  access: all-access # default; alternatively desktop, mobile-web, or mobile-app
+decision:
+  question: Which language audience should we validate next for an English-learning product?
+  proxy_relevance: medium # user-confirmed: high, medium, or low
+  proxy_relevance_reason: Article views show interest in English, not necessarily intent to learn or pay.
 ```
 
 `projects` must be non-empty and may contain no more than five Wikipedia
 editions. The source edition can be outside `projects`: it is used to resolve
 the confirmed canonical article, not necessarily to compare its views. Dates
 are inclusive and cannot extend into the future.
+
+`traffic.access` is optional and defaults to `all-access`. Set it to a device
+access type only when the research question requires that split. Every run uses
+Wikimedia's `user` agent category; traffic categorized as `spider` or
+`automated` is excluded and recorded in the manifest.
+
+`decision` is optional but recommended when the report will inform a product
+choice. It keeps two distinct judgments visible: `proxy_relevance` is the
+user-confirmed fit between the selected article and the stated decision, while
+the report's `confidence` is calculated from the pageview data quality. If
+`decision` is omitted, the report marks relevance as `not assessed` rather
+than inferring it from Wikipedia views.
 
 ## Topic baskets
 

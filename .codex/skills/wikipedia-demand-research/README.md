@@ -9,6 +9,11 @@ It measures interest in named Wikipedia article proxies. It does **not**
 measure market size, willingness to pay, unique people, or country-level
 demand.
 
+Each report separates the observed pageview trend, calculated confidence in
+that observation, and the user-confirmed relevance of the selected article to
+the decision being considered. If no decision context is supplied, relevance
+is reported as `not assessed`.
+
 ## Install in a repository
 
 Copy this directory into the target repository at:
@@ -36,8 +41,13 @@ In a Codex chat, ask for the skill explicitly:
 ```
 
 If the request does not name an exact Wikipedia article, the agent should show
-search candidates and wait for confirmation. It should not silently choose an
-article or begin collecting data before that confirmation.
+up to four search candidates at once and wait for confirmation. It should not
+silently choose an article or begin collecting data before that confirmation.
+
+By default, reports use Wikimedia's `user` traffic across all access types;
+traffic categorized as `spider` or `automated` is excluded. To study one device
+access type, add `--access desktop`, `--access mobile-web`, or
+`--access mobile-app` when creating a research specification or direct run.
 
 ## Run the included example
 

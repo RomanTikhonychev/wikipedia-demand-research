@@ -41,6 +41,21 @@ research. `share_of_project_views` makes comparisons between different-sized
 language editions more meaningful, but does not make them a measure of a
 market.
 
+## Decision conclusions: confidence is not relevance
+
+Every edition receives a short decision conclusion with three separate parts:
+
+1. **Data observation** — the descriptive pageview trend for the linked article.
+2. **Confidence** — the calculated reliability of that observation, based on
+   complete months, coverage, typical traffic, and conspicuous spikes.
+3. **Decision relevance** — a user-confirmed `high`, `medium`, or `low`
+   assessment of how well the selected article represents the stated decision.
+
+The script never calculates decision relevance from pageviews. If the research
+specification has no decision context, the report says `not assessed` and asks
+for that confirmation. A high-confidence pageview trend can still have low
+relevance to a decision about a product, price, or willingness to pay.
+
 ## What it does not measure
 
 Do not treat article views as the size of a market, demand for a product,

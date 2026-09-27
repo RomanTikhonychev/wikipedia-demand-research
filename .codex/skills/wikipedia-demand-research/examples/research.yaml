@@ -11,3 +11,7 @@ projects:
 period:
   start: 2024-01-01
   end: 2024-12-31
+decision:
+  question: Which language audience should we validate next for an English-learning product?
+  proxy_relevance: medium
+  proxy_relevance_reason: Article views indicate topic interest, not intent to learn or pay for a product.

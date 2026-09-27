@@ -11,6 +11,8 @@ import yaml
 
 
 QID_PATTERN = re.compile(r"Q[1-9][0-9]*$")
+ACCESS_TYPES = ("all-access", "desktop", "mobile-web", "mobile-app")
+RELEVANCE_LEVELS = ("high", "medium", "low")
 
 
 def _required_text(value: object, field: str) -> str:
@@ -76,6 +78,10 @@ class ResearchSpec:
     end: date
     topic_label: str | None = None
     articles: tuple[TopicArticle, ...] = ()
+    access: str = "all-access"
+    decision_question: str | None = None
+    proxy_relevance: str | None = None
+    proxy_relevance_reason: str | None = None
 
     @property
     def topic_articles(self) -> tuple[TopicArticle, ...]:
@@ -87,12 +93,21 @@ class ResearchSpec:
         topic: dict[str, object] = {"articles": [article.to_dict() for article in self.topic_articles]}
         if self.topic_label:
             topic["label"] = self.topic_label
-        return {
+        result: dict[str, object] = {
             "research_name": self.research_name,
             "topic": topic,
             "projects": list(self.projects),
             "period": {"start": self.start.isoformat(), "end": self.end.isoformat()},
+            "traffic": {"access": self.access},
         }
+        if self.decision_question:
+            decision: dict[str, object] = {"question": self.decision_question}
+            if self.proxy_relevance:
+                decision["proxy_relevance"] = self.proxy_relevance
+            if self.proxy_relevance_reason:
+                decision["proxy_relevance_reason"] = self.proxy_relevance_reason
+            result["decision"] = decision
+        return result
 
 
 def parse_research_spec(payload: object) -> ResearchSpec:
@@ -103,12 +118,18 @@ def parse_research_spec(payload: object) -> ResearchSpec:
     topic = payload.get("topic")
     period = payload.get("period")
     projects = payload.get("projects")
+    traffic = payload.get("traffic", {})
+    decision = payload.get("decision", {})
     if not isinstance(topic, dict):
         raise ValueError("topic must be a mapping.")
     if not isinstance(period, dict):
         raise ValueError("period must be a mapping.")
     if not isinstance(projects, list) or not projects:
         raise ValueError("projects must be a non-empty list of Wikipedia editions.")
+    if not isinstance(traffic, dict):
+        raise ValueError("traffic must be a mapping.")
+    if not isinstance(decision, dict):
+        raise ValueError("decision must be a mapping.")
 
     articles_payload = topic.get("articles")
     if articles_payload is None:
@@ -129,6 +150,24 @@ def parse_research_spec(payload: object) -> ResearchSpec:
     end = _parse_date(period.get("end"), "period.end")
     if end < start:
         raise ValueError("period.end must not be before period.start.")
+    access = _required_text(traffic.get("access", "all-access"), "traffic.access")
+    if access not in ACCESS_TYPES:
+        raise ValueError(f"traffic.access must be one of: {', '.join(ACCESS_TYPES)}.")
+    decision_question = decision.get("question")
+    if decision_question is not None:
+        decision_question = _required_text(decision_question, "decision.question")
+    proxy_relevance = decision.get("proxy_relevance")
+    if proxy_relevance is not None:
+        proxy_relevance = _required_text(proxy_relevance, "decision.proxy_relevance")
+        if proxy_relevance not in RELEVANCE_LEVELS:
+            raise ValueError(f"decision.proxy_relevance must be one of: {', '.join(RELEVANCE_LEVELS)}.")
+        if decision_question is None:
+            raise ValueError("decision.proxy_relevance requires decision.question.")
+    proxy_relevance_reason = decision.get("proxy_relevance_reason")
+    if proxy_relevance_reason is not None:
+        proxy_relevance_reason = _required_text(proxy_relevance_reason, "decision.proxy_relevance_reason")
+        if proxy_relevance is None:
+            raise ValueError("decision.proxy_relevance_reason requires decision.proxy_relevance.")
     label = topic.get("label")
     if label is not None:
         label = _required_text(label, "topic.label")
@@ -142,6 +181,10 @@ def parse_research_spec(payload: object) -> ResearchSpec:
         end=end,
         topic_label=label,
         articles=articles,
+        access=access,
+        decision_question=decision_question,
+        proxy_relevance=proxy_relevance,
+        proxy_relevance_reason=proxy_relevance_reason,
     )
 
 
