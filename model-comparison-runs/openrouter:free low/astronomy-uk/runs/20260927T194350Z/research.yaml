@@ -1,0 +1,15 @@
+research_name: 'Astronomy: Ukrainian Wikipedia interest'
+topic:
+  articles:
+  - source_project: uk.wikipedia
+    source_title: Астрономія
+    qid: Q333
+    role: primary
+    weight: 1.0
+projects:
+- uk.wikipedia
+period:
+  start: '2024-09-01'
+  end: '2026-08-31'
+traffic:
+  access: all-access

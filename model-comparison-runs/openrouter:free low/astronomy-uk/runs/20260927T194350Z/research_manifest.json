@@ -1,0 +1,87 @@
+{
+  "created_at": "2026-09-27T19:43:52.235904+00:00",
+  "parameters": {
+    "source_project": "uk.wikipedia",
+    "topic": "Астрономія",
+    "projects": [
+      "uk.wikipedia"
+    ],
+    "start": "2024-09-01",
+    "end": "2026-08-31"
+  },
+  "traffic": {
+    "access": "all-access",
+    "access_label": "all access types",
+    "agent": "user",
+    "excluded_agent_categories": [
+      "spider",
+      "automated"
+    ]
+  },
+  "wikidata_qid": "Q333",
+  "resolved_articles": {
+    "uk.wikipedia": "Астрономія"
+  },
+  "projects_without_linked_article": [],
+  "summary": {
+    "uk.wikipedia": {
+      "article": "Астрономія",
+      "trend": "declining",
+      "period_change": -0.8826897307832866,
+      "year_over_year": -0.596244131455399,
+      "reliability": "medium",
+      "reliability_reason": "24 complete calendar months; one monthly spike exceeds three times the median.",
+      "data_quality": {
+        "complete_months": 24,
+        "incomplete_months": 0,
+        "expected_days": 730,
+        "days_with_data": 730,
+        "missing_days": 0,
+        "zero_days": 0,
+        "coverage": 1.0
+      }
+    }
+  },
+  "decision_conclusions": [
+    {
+      "edition": "uk.wikipedia",
+      "data_observation": "Views of the linked article in uk.wikipedia decreased by -88% over the selected period.",
+      "confidence": "medium",
+      "confidence_reason": "24 complete calendar months; one monthly spike exceeds three times the median.",
+      "decision_relevance": {
+        "assessment": "not assessed",
+        "reason": "Confirm how well this Wikipedia article represents the decision before relying on the signal."
+      },
+      "recommended_next_step": "Check whether the decline persists in a longer period and with a product-specific source."
+    }
+  ],
+  "raw_data_file": "raw_pageviews.json",
+  "requests": [
+    {
+      "url": "https://uk.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&redirects=1&prop=pageprops&titles=%D0%90%D1%81%D1%82%D1%80%D0%BE%D0%BD%D0%BE%D0%BC%D1%96%D1%8F",
+      "cache_key": "27e7373801e8b09bb6039d9579dd71a85ddfd6ca6e315db4c8843de71f94771d",
+      "retrieved_at": "2026-09-27T19:43:44.412963+00:00",
+      "source": "cache"
+    },
+    {
+      "url": "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&ids=Q333&props=sitelinks",
+      "cache_key": "a022032a990b0b4bc17256a22b9d18b429006675c9e40f741147c7f5a2872917",
+      "retrieved_at": "2026-09-27T19:43:50.935603+00:00",
+      "source": "network"
+    },
+    {
+      "url": "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/uk.wikipedia/all-access/user/%D0%90%D1%81%D1%82%D1%80%D0%BE%D0%BD%D0%BE%D0%BC%D1%96%D1%8F/daily/2024090100/2026083100",
+      "cache_key": "b58f64954fcfee647f2b0b8d37d8501c71b31e74492dd4b1046ffcfdb2e603fb",
+      "retrieved_at": "2026-09-27T19:43:51.780173+00:00",
+      "source": "network"
+    },
+    {
+      "url": "https://wikimedia.org/api/rest_v1/metrics/pageviews/aggregate/uk.wikipedia/all-access/user/monthly/2024090100/2026083100",
+      "cache_key": "01572dc95d54626376631975b809f075829fc4538e572ed5203d86e18b58bee2",
+      "retrieved_at": "2026-09-27T19:43:51.915424+00:00",
+      "source": "network"
+    }
+  ],
+  "methodology_version": "0.1",
+  "research_spec_file": "research.yaml"
+}
