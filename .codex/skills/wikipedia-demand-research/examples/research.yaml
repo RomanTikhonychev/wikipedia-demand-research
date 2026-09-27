@@ -1,0 +1,13 @@
+# Copy this file to researches/<study-name>/research.yaml before editing it.
+research_name: "English language: Germany and Ukraine"
+topic:
+  label: English language
+  source_project: en.wikipedia
+  source_title: English language
+  qid: Q1860
+projects:
+  - de.wikipedia
+  - uk.wikipedia
+period:
+  start: 2024-01-01
+  end: 2024-12-31

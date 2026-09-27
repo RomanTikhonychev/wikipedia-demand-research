@@ -20,6 +20,10 @@ def _required_text(value: object, field: str) -> str:
 
 
 def _parse_date(value: object, field: str) -> date:
+    # PyYAML resolves an unquoted YYYY-MM-DD scalar to datetime.date.
+    # Accept that normal YAML representation as well as an explicit string.
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
     text = _required_text(value, field)
     try:
         return datetime.strptime(text, "%Y-%m-%d").date()

@@ -6,12 +6,14 @@ from __future__ import annotations
 import argparse
 import calendar
 import csv
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -41,6 +43,10 @@ from research_config import ResearchSpec, default_run_output_dir, load_research_
 
 REST_ROOT = "https://wikimedia.org/api/rest_v1/metrics/pageviews"
 USER_AGENT = ""
+CACHE_DIR: Path | None = None
+REFRESH = False
+OFFLINE = False
+REQUEST_LOG: list[dict[str, object]] = []
 
 
 def parse_date(value: str) -> date:
@@ -57,14 +63,39 @@ def timestamp(value: date) -> str:
 def get_json(url: str) -> dict:
     if not USER_AGENT:
         raise RuntimeError("Provide --user-agent with a contact URL or email before calling Wikimedia.")
+    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    cache_path = CACHE_DIR / f"{key}.json" if CACHE_DIR else None
+    if cache_path and cache_path.exists() and not REFRESH:
+        envelope = json.loads(cache_path.read_text(encoding="utf-8"))
+        REQUEST_LOG.append({"url": url, "cache_key": key, "retrieved_at": envelope["retrieved_at"], "source": "cache"})
+        return envelope["payload"]
+    if OFFLINE:
+        raise RuntimeError(f"Offline mode has no cached response for: {url}")
     request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    try:
-        with urlopen(request, timeout=30) as response:
-            return json.load(response)
-    except HTTPError as error:
-        raise RuntimeError(f"Request failed with HTTP {error.code}: {url}") from error
-    except URLError as error:
-        raise RuntimeError(f"Could not reach Wikimedia: {error.reason}") from error
+    for attempt in range(3):
+        try:
+            with urlopen(request, timeout=30) as response:
+                payload = json.load(response)
+            if not isinstance(payload, dict):
+                raise RuntimeError(f"Wikimedia returned an unexpected response for: {url}")
+            retrieved_at = datetime.now(timezone.utc).isoformat()
+            if cache_path:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps({"url": url, "retrieved_at": retrieved_at, "payload": payload}, ensure_ascii=False) + "\n", encoding="utf-8")
+            REQUEST_LOG.append({"url": url, "cache_key": key, "retrieved_at": retrieved_at, "source": "network"})
+            return payload
+        except HTTPError as error:
+            if error.code == 429 or 500 <= error.code < 600:
+                if attempt < 2:
+                    time.sleep(2**attempt)
+                    continue
+            raise RuntimeError(f"Request failed with HTTP {error.code}: {url}") from error
+        except URLError as error:
+            if attempt < 2:
+                time.sleep(2**attempt)
+                continue
+            raise RuntimeError(f"Could not reach Wikimedia: {error.reason}") from error
+    raise RuntimeError(f"Could not retrieve: {url}")
 
 
 def mediawiki_api(project: str, params: dict[str, str]) -> dict:
@@ -290,12 +321,13 @@ def create_pdf(
     story.append(Spacer(1, 3 * mm))
     image = Image(str(chart_path), width=178 * mm, height=62 * mm)
     story.extend([image, Spacer(1, 3 * mm)])
-    table_rows = [["Edition", "Article", "Trend", "Change", "YoY", "Reliability"]]
+    table_rows = [["Edition", "Article", "Trend", "Change", "Reliability", "Coverage"]]
     for project, item in summary.items():
+        coverage = item["data_quality"]["coverage"]
         table_rows.append(
-            [project, item["article"], item["trend"], percent(item["period_change"]), percent(item["year_over_year"]), item["reliability"]]
+            [project, item["article"], item["trend"], percent(item["period_change"]), item["reliability"], f"{coverage:.0%}"]
         )
-    table = Table(table_rows, colWidths=[28 * mm, 46 * mm, 28 * mm, 18 * mm, 18 * mm, 28 * mm])
+    table = Table(table_rows, colWidths=[26 * mm, 52 * mm, 28 * mm, 20 * mm, 28 * mm, 18 * mm])
     table.setStyle(
         TableStyle(
             [
@@ -312,7 +344,8 @@ def create_pdf(
     story.extend([table, Spacer(1, 3 * mm)])
     bullets = []
     for project, item in summary.items():
-        bullets.append(f"{project}: {item['trend']} ({percent(item['period_change'])}); {item['reliability_reason']}")
+        quality = item["data_quality"]
+        bullets.append(f"{project}: {item['trend']} ({percent(item['period_change'])}); {item['reliability_reason']} {quality['missing_days']} missing days and {quality['zero_days']} zero-view days.")
     story.append(Paragraph("<br/>".join(bullets), body))
     story.append(Spacer(1, 2 * mm))
     story.append(
@@ -325,6 +358,21 @@ def create_pdf(
         story.append(Paragraph(f"No Wikidata-linked article was found for: {', '.join(missing_projects)}.", body))
     story.append(Paragraph("Source: Wikimedia Pageviews API. Exact requests and resolved articles are in research_manifest.json.", body))
     document.build(story)
+
+
+def create_markdown_report(path: Path, topic: str, qid: str, summary: dict[str, dict], start: date, end: date, missing_projects: list[str]) -> None:
+    lines = [f"# Wikipedia interest signal: {topic}", "", f"- **Wikidata item:** {qid}", f"- **Period:** {start.isoformat()} to {end.isoformat()}", "", "## Results", "", "| Edition | Article | Trend | Change | Reliability | Coverage |", "| --- | --- | --- | --- | --- | --- |"]
+    for project, item in summary.items():
+        lines.append(f"| {project} | {item['article']} | {item['trend']} | {percent(item['period_change'])} | {item['reliability']} | {item['data_quality']['coverage']:.0%} |")
+    lines.extend(["", "## Interpretation", ""])
+    for project, item in summary.items():
+        quality = item["data_quality"]
+        lines.append(f"- **{project}:** {item['trend']} ({percent(item['period_change'])}); {item['reliability_reason']} Coverage: {quality['days_with_data']}/{quality['expected_days']} days.")
+    lines.extend(["", "## Limits", "", "Wikipedia article pageviews are a topic-interest signal, not market size, unique people, willingness to pay, or proof of product demand."])
+    if missing_projects:
+        lines.extend(["", f"No Wikidata-linked article was found for: {', '.join(missing_projects)}."])
+    lines.extend(["", "Source: Wikimedia Pageviews API. Exact requests and resolved articles are in `research_manifest.json`.", ""])
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:
@@ -341,6 +389,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start", type=parse_date, help="Inclusive YYYY-MM-DD")
     parser.add_argument("--end", type=parse_date, help="Inclusive YYYY-MM-DD")
     parser.add_argument("--output-dir", type=Path, help="Output directory; required for direct runs and optional for --research")
+    parser.add_argument("--cache-dir", type=Path, default=Path("outputs/cache"), help="Reusable Wikimedia response cache")
+    parser.add_argument("--refresh", action="store_true", help="Ignore cached responses and request fresh data")
+    parser.add_argument("--offline", action="store_true", help="Use cached responses only")
     parser.add_argument(
         "--user-agent",
         default=os.environ.get("WIKIMEDIA_USER_AGENT"),
@@ -414,8 +465,13 @@ def run_article_basket(args: argparse.Namespace, spec: ResearchSpec, output_dir:
             "--start", spec.start.isoformat(),
             "--end", spec.end.isoformat(),
             "--output-dir", str(article_dir),
+            "--cache-dir", str(args.cache_dir),
             "--user-agent", args.user_agent,
         ]
+        if args.refresh:
+            command.append("--refresh")
+        if args.offline:
+            command.append("--offline")
         completed = subprocess.run(command, check=False)
         if completed.returncode:
             return completed.returncode
@@ -431,12 +487,13 @@ def run_article_basket(args: argparse.Namespace, spec: ResearchSpec, output_dir:
 
 
 def main() -> int:
-    global USER_AGENT
+    global USER_AGENT, CACHE_DIR, REFRESH, OFFLINE, REQUEST_LOG
     args = parse_args()
     if not args.user_agent:
         print("Error: provide --user-agent or set WIKIMEDIA_USER_AGENT with contact information.", file=sys.stderr)
         return 2
     USER_AGENT = args.user_agent
+    CACHE_DIR, REFRESH, OFFLINE, REQUEST_LOG = args.cache_dir, args.refresh, args.offline, []
     try:
         if args.search:
             if not args.source_project:
@@ -542,6 +599,7 @@ def main() -> int:
         spec.end,
         missing_projects,
     )
+    create_markdown_report(output_dir / "report.md", canonical_source_title, qid, summary, spec.start, spec.end, missing_projects)
     manifest = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "parameters": {"source_project": spec.source_project, "topic": spec.source_title, "projects": list(spec.projects), "start": spec.start.isoformat(), "end": spec.end.isoformat()},
@@ -550,6 +608,7 @@ def main() -> int:
         "projects_without_linked_article": missing_projects,
         "summary": summary,
         "raw_data_file": "raw_pageviews.json",
+        "requests": REQUEST_LOG,
         "methodology_version": "0.1",
     }
     if research_snapshot:

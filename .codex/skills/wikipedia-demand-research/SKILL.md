@@ -7,8 +7,9 @@ description: "Analyze Wikipedia pageview trends for a confirmed or clarifiable t
 
 Use this skill to produce a reproducible first-pass signal of interest in a
 Wikipedia topic. The current implementation resolves one confirmed source
-article across up to five language editions via Wikidata, compares article
-pageviews, and creates a chart plus a one-page PDF report.
+article—or a user-confirmed basket of articles—across up to five language
+editions via Wikidata, compares article pageviews, and creates a chart plus a
+one-page PDF report.
 
 When developing or substantially changing this skill, read the
 [task requirements](references/task-requirements.md) and keep the result
@@ -53,10 +54,9 @@ insufficient for a reliable conclusion.”
    disambiguation marker), and ask the user to choose. Do not run analysis,
    create `research.yaml`, or silently select an article until they confirm it.
 2. Confirm the language editions, period, and what would make the result useful
-   to the user. The current implementation accepts one article proxy; do not
-   for a broader topic, ask the user to confirm every article in the basket.
-   The default is separate analysis per article; never create an aggregate
-   without explicit user approval.
+   to the user. For a broader topic, ask the user to confirm every article in
+   the basket. The default is separate analysis per article; never create an
+   aggregate without explicit user approval.
 3. Run `.codex/skills/wikipedia-demand-research/scripts/compare_topic.py`. It retrieves the source page's Wikidata QID,
    finds matching articles in the requested editions, downloads pageviews, and
    writes a chart, report, data, and manifest to one output directory.
@@ -79,6 +79,14 @@ parameters. Read [the saved-research guide](references/research-spec.md) for
 the creation command, schema, and revision rules. Each configuration-based run
 gets a separate output directory and copies the applied specification beside
 its manifest.
+
+## Reproducible data collection
+
+Responses from Wikimedia are cached in `outputs/cache/` by default. Reuse the
+cache for ordinary repeated runs, use `--refresh` only when fresh API data are
+needed, and use `--offline` to verify that a saved study can be reproduced
+without network access. Inspect the manifest's `requests` list when explaining
+which API responses were reused or retrieved.
 
 ## Command
 
@@ -121,3 +129,12 @@ or set it once as the `WIKIMEDIA_USER_AGENT` environment variable.
 
 Read [the methodology note](references/methodology.md) before interpreting the
 data or explaining its limitations.
+
+## Validation and further development
+
+Before releasing a material change, follow the evidence and remaining test
+case in the [validation record](references/validation.md). When explaining how
+AI-assisted development was checked, use the
+[development notes](references/development-notes.md). Read the
+[roadmap](references/roadmap.md) only when planning an extension beyond the
+current workflow.

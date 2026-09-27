@@ -1,4 +1,6 @@
 import importlib.util
+import json
+import subprocess
 import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -7,6 +9,8 @@ from tempfile import TemporaryDirectory
 
 COMPARE_PATH = Path(__file__).parents[1] / "scripts" / "compare_topic.py"
 SCRIPTS_PATH = COMPARE_PATH.parent
+FIXTURES_PATH = Path(__file__).parent / "fixtures"
+EXAMPLES_PATH = Path(__file__).parents[1] / "examples"
 import sys
 
 sys.path.insert(0, str(SCRIPTS_PATH))
@@ -38,6 +42,45 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(result["2024-02"]["zero_days"], 1)
         self.assertEqual(result["2024-02"]["missing_days"], 2)
 
+    def test_pageview_fixture_preserves_a_gap_and_zero_day(self):
+        payload = json.loads((FIXTURES_PATH / "article_pageviews_with_gap.json").read_text(encoding="utf-8"))
+        result = compare_topic.monthly_article(compare_topic.article_daily(payload), date(2024, 2, 1), date(2024, 2, 3))
+        self.assertEqual(result["2024-02"], {"views": 12, "days": 2, "expected_days": 3, "zero_days": 1, "missing_days": 1})
+
+    def test_get_json_uses_cached_response_in_offline_mode(self):
+        with TemporaryDirectory() as temporary_directory:
+            cache_dir = Path(temporary_directory)
+            url = "https://example.test/data"
+            key = __import__("hashlib").sha256(url.encode("utf-8")).hexdigest()
+            (cache_dir / f"{key}.json").write_text(json.dumps({"url": url, "retrieved_at": "2026-09-27T00:00:00+00:00", "payload": {"items": []}}), encoding="utf-8")
+            previous = compare_topic.CACHE_DIR, compare_topic.OFFLINE, compare_topic.REFRESH, compare_topic.USER_AGENT
+            try:
+                compare_topic.CACHE_DIR, compare_topic.OFFLINE, compare_topic.REFRESH, compare_topic.USER_AGENT = cache_dir, True, False, "test/1 (test@example.com)"
+                self.assertEqual(compare_topic.get_json(url), {"items": []})
+            finally:
+                compare_topic.CACHE_DIR, compare_topic.OFFLINE, compare_topic.REFRESH, compare_topic.USER_AGENT = previous
+
+    def test_markdown_report_includes_quality_and_limits(self):
+        summary = {"uk.wikipedia": {"article": "Astronomy", "trend": "growing", "period_change": 0.2, "reliability": "medium", "reliability_reason": "12 complete calendar months.", "data_quality": {"coverage": 1.0, "days_with_data": 365, "expected_days": 365}}}
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "report.md"
+            compare_topic.create_markdown_report(path, "Astronomy", "Q6999", summary, date(2024, 1, 1), date(2024, 12, 31), [])
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("Coverage", text)
+            self.assertIn("not market size", text)
+
+    def test_pdf_is_one_page_and_contains_quality_table(self):
+        summary = {"uk.wikipedia": {"article": "Astronomy", "trend": "growing", "period_change": 0.2, "year_over_year": None, "reliability": "medium", "reliability_reason": "12 complete calendar months.", "data_quality": {"coverage": 1.0, "missing_days": 0, "zero_days": 0}}}
+        rows = [{"month": "2024-01", "article_views": 100, "share_of_project_views": 0.000001}]
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            chart, pdf = root / "chart.png", root / "report.pdf"
+            compare_topic.create_chart({"uk.wikipedia": rows}, chart)
+            compare_topic.create_pdf(pdf, chart, "Astronomy", "Q6999", summary, date(2024, 1, 1), date(2024, 12, 31), [])
+            info = subprocess.run(["pdfinfo", str(pdf)], check=True, capture_output=True, text=True).stdout
+            self.assertIn("Pages:           1", info)
+            self.assertIn(b"%PDF", pdf.read_bytes()[:8])
+
     def test_complete_month_requires_every_day_and_full_requested_month(self):
         self.assertTrue(compare_topic.is_complete_month("2024-02", 29, date(2024, 1, 1), date(2024, 3, 31)))
         self.assertFalse(compare_topic.is_complete_month("2024-02", 28, date(2024, 1, 1), date(2024, 3, 31)))
@@ -68,6 +111,12 @@ class ResearchTests(unittest.TestCase):
             path = Path(temporary_directory) / "research.yaml"
             research_config.write_research_spec(path, spec)
             self.assertEqual(research_config.load_research_spec(path), spec)
+
+    def test_packaged_example_accepts_yaml_date_scalars(self):
+        spec = research_config.load_research_spec(EXAMPLES_PATH / "research.yaml")
+        self.assertEqual(spec.qid, "Q1860")
+        self.assertEqual(spec.start, date(2024, 1, 1))
+        self.assertEqual(spec.end, date(2024, 12, 31))
 
     def test_research_spec_rejects_missing_confirmed_qid(self):
         payload = {

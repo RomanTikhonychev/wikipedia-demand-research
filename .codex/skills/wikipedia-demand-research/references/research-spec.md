@@ -1,8 +1,9 @@
 # Saved research specification
 
 Use a `research.yaml` file when a user may revise, repeat, or extend a
-confirmed single-article study. The specification is the durable statement of
-what was measured; each run stores a copy beside its manifest and data.
+confirmed study. It can name either one article or a user-confirmed basket.
+The specification is the durable statement of what was measured; each run
+stores a copy beside its manifest and data.
 
 ## Create a specification
 
@@ -63,8 +64,31 @@ period:
   end: 2025-12-31
 ```
 
-`projects` must be non-empty, must include `topic.source_project`, and may
-contain no more than five Wikipedia editions. Dates are inclusive and cannot
-extend into the future. This version intentionally supports one confirmed
-article only; topic baskets, weighting, criteria, caching, and report
-localization are later extensions.
+`projects` must be non-empty and may contain no more than five Wikipedia
+editions. The source edition can be outside `projects`: it is used to resolve
+the confirmed canonical article, not necessarily to compare its views. Dates
+are inclusive and cannot extend into the future.
+
+## Topic baskets
+
+For a broader topic, replace the single-article fields with `topic.articles`:
+
+```yaml
+topic:
+  articles:
+    - source_project: en.wikipedia
+      source_title: English language
+      qid: Q1860
+      role: primary
+      label: Learning English
+    - source_project: en.wikipedia
+      source_title: Second-language acquisition
+      qid: Q8162
+      role: supporting
+      weight: 0.5
+```
+
+Every article must have a user-confirmed QID. A basket must contain exactly
+one `primary` article; other articles are `supporting`. Weights are preserved
+in the configuration for future use, but the current implementation produces
+separate reports and does not aggregate the basket by default.
