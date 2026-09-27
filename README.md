@@ -26,8 +26,9 @@ To invoke it in Codex, use:
 ## Test runs
 
 The reproducible artifacts from a model-comparison exercise are committed in
-[`model-comparison-runs/`](model-comparison-runs/). The task given to each
-model was:
+the skill at
+[`evaluation/model-comparison-runs/`](.codex/skills/wikipedia-demand-research/evaluation/model-comparison-runs/).
+The task given to each model was:
 
 > Ми думаємо додати курс з астрономії до освітнього застосунку. Чи зростає
 > інтерес до цієї теми в україномовній Wikipedia, і наскільки цьому зростанню
@@ -54,7 +55,7 @@ one article as a proxy for an astronomy course still needs confirmation.
 
 ```text
 .codex/skills/wikipedia-demand-research/  # skill code, tests, docs, example
-model-comparison-runs/                    # committed model-comparison artifacts
+  evaluation/model-comparison-runs/        # committed model-comparison artifacts
 outputs/                                  # local generated reports; ignored
 researches/                               # local study specifications; ignored
 ```

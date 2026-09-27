@@ -71,6 +71,14 @@ For a new study, use `--init-research` after confirming the article. The
 [saved-research guide](references/research-spec.md) describes the format,
 topic baskets, and revision rules.
 
+## Inspect the model-comparison runs
+
+Committed example runs used to check the full workflow on different models are
+in [evaluation/model-comparison-runs/](evaluation/model-comparison-runs/).
+Each run preserves its applied `research.yaml`, raw Wikimedia response,
+monthly CSV, chart, PDF and Markdown report, and manifest. They are examples
+for inspection and reproducibility, not a source of fresh research results.
+
 ## Verify the package
 
 Run these commands from the repository root after installation:
